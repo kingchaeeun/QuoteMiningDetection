@@ -14,6 +14,16 @@ python train_projection.py --backbone kobert
 KPF 사용시:
 python train_projection.py --backbone hf --hf_model_name "KPF/KPF-bert-ner"
 
+마찬가지로 data_path도 cli 기반으로 전달하게 해뒀음
+ex. python train_projection.py \
+    --backbone kobert \
+    --data_path "./data/input_dataset.csv"
+ex. python train_projection.py \
+    --backbone hf \
+    --hf_model_name "KPF/KPF-bert-ner" \
+    --data_path "./data/framing_dataset.pkl"
+
+
 """
 
 import os
