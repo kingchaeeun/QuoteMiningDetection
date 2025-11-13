@@ -7,6 +7,13 @@ train_projection.py
 - KoBERT 또는 HuggingFace(KPF 등) 백본 선택
 - original + article_text + label(4-class) 기반 Supervised Contrastive Learning
 - Projection Layer 학습 후 Encoder 저장
+
+KoBERT 사용시:
+python train_projection.py --backbone kobert
+
+KPF 사용시:
+python train_projection.py --backbone hf --hf_model_name "KPF/KPF-bert-ner"
+
 """
 
 import os
