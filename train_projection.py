@@ -1,3 +1,12 @@
+# backbone 옵션: 커맨드 단에서 처리
+# # KoBERT 백본 사용
+# python train_projection.py --backbone kobert
+#
+# # KPF(HuggingFace) 백본 사용
+# python train_projection.py --backbone hf --hf_model_name kpf-multilingual-base
+
+
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -172,7 +181,7 @@ def load_backbone_and_tokenizer(args):
     if args.backbone == "kobert":
         backbone = get_kobert_model()
         tokenizer = get_tokenizer()
-    elif args.backbone == "hf":
+    elif args.backbone == "hf": # TODO 사용할 hf 모델 이름으로 바꿔 넣기
         if args.hf_model_name is None:
             raise ValueError("When backbone='hf', --hf_model_name must be set.")
         tokenizer = AutoTokenizer.from_pretrained(args.hf_model_name)
