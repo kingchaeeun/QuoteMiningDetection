@@ -42,6 +42,10 @@ from kobert_transformers import get_kobert_model, get_tokenizer
 
 from transformers import AutoModel, AutoTokenizer
 
+## epoch 기록 위한 리스트 선언
+train_loss_history = []
+valid_loss_history = []
+
 
 # =========================
 # Dataset
@@ -255,19 +259,34 @@ def train_projection(args):
                 val_meter.update(loss.item(), input_ids.size(0))
 
         print(f"Epoch {epoch} | Train Loss: {meter.avg:.4f} | Val Loss: {val_meter.avg:.4f}")
+        ## epoch 기록 코드 추가
+        train_loss_history.append(meter.avg)
+        valid_loss_history.append(val_meter.avg)
+
+        # Save last
+        last_path = os.path.join(args.save_dir, "projection_encoder_last.bin")
+        torch.save(encoder.state_dict(), last_path)
 
         # Save best
         if val_meter.avg < best_loss:
             best_loss = val_meter.avg
-            path = os.path.join(args.save_dir, "projection_encoder_best.bin")
-            torch.save(encoder.state_dict(), path)
-            print(f"[INFO] Best model saved → {path}")
-
-        # Save last
-        path = os.path.join(args.save_dir, "projection_encoder_last.bin")
-        torch.save(encoder.state_dict(), path)
+            best_path = os.path.join(args.save_dir, "projection_encoder_best.bin")
+            torch.save(encoder.state_dict(), best_path)
+            print(f"[INFO] Best model saved → {best_path}")
 
     print("[INFO] Training completed.")
+
+    ## 그래프 그리는 코드 추가
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_loss_history, label="Train Loss")
+    plt.plot(valid_loss_history, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Projection Layer Contrastive Learning Loss Curve")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 
 # =========================
