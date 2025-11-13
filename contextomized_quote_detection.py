@@ -43,8 +43,8 @@ def main():
     parser.add_argument("--epochs", default=10, type=int, help="epoch")    
     parser.add_argument("--schedule", default=True, type=bool, help="whether to use the scheduler or not")    
     
-    parser.add_argument("--DATA_DIR", default='./data/contextomized_quote.pkl', type=str, help="data to detect contextomized quote") 
-    parser.add_argument("--MODEL_DIR", default='./model/checkpoint.bin', type=str, help="pretrained QuoteCSE model")
+    parser.add_argument("--DATA_DIR", default='./data/our_dataset_clean.csv', type=str, help="data to detect contextomized quote")
+    parser.add_argument("--MODEL_DIR", default='./model/projection_encoder_best.bin', type=str, help="pretrained QuoteCSE model")
     parser.add_argument("--MODEL_SAVE_DIR", default='./model/contextomized_detection/', type=str, help="fine-tuned QuoteCSE model")
     
     args = parser.parse_args()
@@ -62,14 +62,14 @@ def main():
     args.backbone_model = get_kobert_model()
     args.tokenizer = get_tokenizer()
     
-    df = pd.read_pickle(args.DATA_DIR)
+    df = pd.read_csv(args.DATA_DIR)
     df_train, df_test = train_test_split(df, test_size=0.2, random_state=args.split_seed, stratify=df['label'])
     df_train = df_train.reset_index(drop=True)
     df_test = df_test.reset_index(drop=True)
     
     ros = RandomOverSampler(random_state=args.seed)
-    X_train, y_train = ros.fit_resample(X=df_train.loc[:, ['headline_quote', 'body_quotes']].values, y=df_train['label'])
-    df_train_ros = pd.DataFrame(X_train, columns=['headline_quote', 'body_quotes'])
+    X_train, y_train = ros.fit_resample(X=df_train.loc[:, ['article_text', 'distorted']].values, y=df_train['label'])
+    df_train_ros = pd.DataFrame(X_train, columns=['article_text', 'distorted'])
     df_train_ros['label'] = y_train
     
     loss_func = nn.CrossEntropyLoss(reduction='mean')

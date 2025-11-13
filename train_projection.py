@@ -65,7 +65,7 @@ class FramingDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        original = str(row["original"])
+        original = str(row["distorted"])
         article = str(row["article_text"])
         label = int(row["label"])
 
