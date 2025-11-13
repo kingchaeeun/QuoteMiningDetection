@@ -6,6 +6,7 @@ import argparse
 import pandas as pd
 import os
 import math
+from sklearn.metrics import f1_score, accuracy_score, roc_auc_score, recall_score, precision_score
 
 from detection_datasets import(
     create_data_loader,
@@ -77,7 +78,7 @@ def main():
     encoder.load_state_dict(torch.load(args.MODEL_DIR)) 
     encoder = encoder.to(args.device)
 
-    classifier = Detection_Model(2, args)
+    classifier = Detection_Model(4, args)
     classifier = nn.DataParallel(classifier)
     classifier = classifier.to(args.device)
     
@@ -134,36 +135,57 @@ def main():
 
         loss_data.append([epoch, train_losses.avg, 'Train'])
 
-
     tbar2 = tqdm(testloader)
     classifier.eval()
     with torch.no_grad():
         predictions = []
         answers = []
+        prob_list = []  # AUC용 확률 저장
+
         for embedding, label in tbar2:
-            out = classifier(embedding)
-            preds = torch.argmax(out,dim=1)
-            predictions.extend(preds)
-            answers.extend(label)
+            embedding = embedding.to(args.device)
+            label = label.to(args.device)
 
-            del out, preds
+            out = classifier(embedding)  # [B, 4]
+            probs = F.softmax(out, dim=1)  # [B, 4]  → 각 클래스 확률
+            preds = torch.argmax(probs, dim=1)  # 예측 라벨
 
-        predictions = torch.stack(predictions).cpu().tolist()
-        answers = torch.stack(answers).cpu().tolist()
+            predictions.extend(preds.cpu().tolist())
+            answers.extend(label.cpu().tolist())
+            prob_list.extend(probs.cpu().tolist())
 
-    accuracy = accuracy_score(answers, predictions)
-    f1 = f1_score(answers, predictions, average='binary')
-    precision = precision_score(answers, predictions)
-    recall = recall_score(answers, predictions)
-    auc = roc_auc_score(answers, predictions)  
-    
-    print('accuracy:', accuracy)
-    print('f1:', f1)
-    print('auc:', auc)
-    print('recall:', recall)
-    print('precision:', precision)
+            del out, probs, preds
+
+    # list → numpy / list 그대로 써도 sklearn이 처리해 줌
+    y_true = answers  # [N], 값은 0/1/2/3
+    y_pred = predictions  # [N]
+    y_prob = prob_list  # [N, 4] 각 클래스 확률
+
+    # 기본 정확도
+    accuracy = accuracy_score(y_true, y_pred)
+
+    # F1 / Precision / Recall: 멀티클래스이므로 average 지정
+    f1_macro = f1_score(y_true, y_pred, average='macro')
+    f1_weighted = f1_score(y_true, y_pred, average='weighted')
+
+    precision_macro = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    recall_macro = recall_score(y_true, y_pred, average='macro', zero_division=0)
+
+    # Multi-class AUC (macro, one-vs-rest)
+    try:
+        auc_macro_ovr = roc_auc_score(y_true, y_prob, multi_class='ovr', average='macro')
+    except ValueError:
+        # 샘플 수가 너무 적거나, 특정 클래스가 아예 안 나온 경우 등에서 터질 수 있음
+        auc_macro_ovr = None
+
+    print("===== Evaluation (4-class) =====")
+    print("accuracy        :", accuracy)
+    print("f1_macro        :", f1_macro)
+    print("f1_weighted     :", f1_weighted)
+    print("precision_macro :", precision_macro)
+    print("recall_macro    :", recall_macro)
+    print("auc_macro_ovr   :", auc_macro_ovr)
 
 
-    
 if __name__ == "__main__":
     main()
