@@ -42,9 +42,8 @@ pip install torch transformers pandas scikit-learn tqdm matplotlib
 | :--- | :---: | :--- | :--- |
 | **`article_text`** | 필수 | 분석할 텍스트 (Target) | "경제 성장률이 하락세라고 밝혔다." |
 | **`label`** | 필수 | 정답 레이블 (0: 정상, 1: 왜곡) | 1 |
-| *`distorted`* | (선택) | 비교할 원문 텍스트 (Source) | "경제 성장률이 둔화될 가능성이 있다." |
-
-> **Tip:** `distorted` 컬럼이 있으면 모델이 두 문장을 쌍(Pair)으로 입력받아 더 정밀하게 비교하며, 없으면 `article_text`만 보고 판단합니다.
+| *`distorted`* | 필수 | 비교할 원문 텍스트 (Source) | "경제 성장률이 둔화될 가능성이 있다." |
+.
 
 ---
 
@@ -120,3 +119,4 @@ python evaluate.py
 ## ⚠️ Note
 * **모델 파일 용량:** 생성되는 `.bin` 모델 파일은 용량이 크므로(약 400MB+), GitHub에는 업로드되지 않도록 주의해주세요. (`.gitignore` 사용 권장)
 * **데이터:** 보안상의 이유로 샘플 데이터만 포함되어 있을 수 있습니다. 전체 데이터는 별도로 준비해주세요.
+
