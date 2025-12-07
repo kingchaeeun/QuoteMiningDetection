@@ -80,25 +80,43 @@ def main():
 
     loss_func = nn.CrossEntropyLoss(reduction='mean')
     
-    # ===== Encoder 로딩 (우리가 Jupyter에서 성공한 방식) =====
+# ===== Encoder 로딩 (수정됨) =====
     encoder = Encoder(args.backbone_model, hidden_size=args.hidden_size)
 
+    # 저장된 모델 불러오기
     raw_state = torch.load(args.MODEL_DIR, map_location=args.device)
+    if "state_dict" in raw_state:  # 혹시 state_dict 키로 감싸져 있는 경우 대비
+        raw_state = raw_state["state_dict"]
 
     new_state = {}
     for k, v in raw_state.items():
-        if k.startswith("module.encoder."):
-            new_key = "backbone." + k[len("module.encoder."):]
-            new_state[new_key] = v
-        elif k.startswith("module.mlp_projection."):
-            new_key = "projection." + k[len("module.mlp_projection."):]
-            new_state[new_key] = v
+        # 1. DataParallel로 저장된 경우 'module.' 접두사 제거
+        if k.startswith("module."):
+            k = k[7:]
+        
+        # 2. 이름 매핑 (저장된 이름 -> 현재 모델 이름)
+        if k.startswith("encoder."):
+            # 예: encoder.layer.0 -> backbone.layer.0
+            new_key = k.replace("encoder.", "backbone.")
+        elif k.startswith("backbone."):
+            # 이미 backbone.으로 시작하면 그대로 사용
+            new_key = k
+        elif k.startswith("projection."):
+            # projection 레이어도 그대로 사용
+            new_key = k
         else:
-            continue
+            # 그 외(HuggingFace 원본 키 등)는 앞에 backbone.을 붙여줌
+            # 예: embeddings.word_embeddings -> backbone.embeddings.word_embeddings
+            new_key = "backbone." + k
 
+        new_state[new_key] = v
+
+    # 로드 실행 (strict=False로 설정하여 classifier 등 불필요한 키 에러 방지)
     missing, unexpected = encoder.load_state_dict(new_state, strict=False)
-    print("encoder missing keys:", missing)
-    print("encoder unexpected keys:", unexpected)
+    
+    print(f"[Info] Encoder Loaded.")
+    print(f" - Missing keys (should be empty or classifier only): {missing}")
+    # print(f" - Unexpected keys: {unexpected}") # 필요시 주석 해제
 
     encoder = encoder.to(args.device)
     encoder.eval()
@@ -293,4 +311,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
