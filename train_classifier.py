@@ -2,18 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-train_classifier.py (Modified from train_projection.py)
+[Project] Quote Mining Detection - Classification Training Script
 
-- KoBERT 또는 HuggingFace(RoBERTa 등) 백본 선택
-- original + article_text 입력을 받아 label을 예측하는 Classification 모델 학습
-- CrossEntropyLoss 사용
+이 스크립트는 데이터 로드, 전처리, 모델 정의, 학습 및 검증 과정을 하나로 통합한
+All-in-One 학습 파일입니다.
 
-사용법:
-python train_classifier.py \
-    --backbone hf \
-    --hf_model_name "roberta-base" \
-    --data_path "./data/our_dataset_clean.csv" \
-    --num_classes 2
+주요 기능:
+1. FramingDataset: CSV 데이터를 로드하여 BERT 입력 형식으로 변환 (Pair/Single 모드 지원)
+2. FramingClassifier: Pre-trained Backbone(KoBERT/RoBERTa) + Classifier Head 구조 정의
+3. Train Loop: CrossEntropy Loss를 사용한 학습 및 검증, Best Model 저장
+4. Visualization: 학습 종료 후 Loss 및 Accuracy 곡선 시각화
+
+사용법 예시:
+1) 기본 실행 (dataset.csv 자동 로드):
+   python train_classifier.py
+
+2) 옵션 지정 실행:
+   python train_classifier.py --backbone hf --hf_model_name "roberta-base" --epochs 5
 """
 
 import os
@@ -352,3 +357,4 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     train_classification(args)
+
