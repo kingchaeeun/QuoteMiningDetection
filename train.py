@@ -1,211 +1,187 @@
-from kobert_transformers import get_kobert_model
-from kobert_transformers import get_tokenizer
-
-from sklearn.model_selection import train_test_split
-from tqdm.auto import tqdm
-import torch.nn as nn
-import torch
+import os
 import argparse
 import pandas as pd
-import os
-import datetime
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
-from datasets_code import(
-    create_data_loader,
-    tuplify_with_device,
-)
+# 분리된 모듈 임포트
+from dataset import FramingDataset
+from model import FramingClassifier
+from utils import set_seed, AverageMeter, load_backbone_and_tokenizer
 
-from loss_func import QuoteCSELoss
-from models import Encoder
-from util import make_pair, AverageMeter, set_seed
-from pytorchtools import EarlyStopping
-
-
-
-def main():
-    parser = argparse.ArgumentParser()
+def save_inference_results(model, tokenizer, valid_df, device, args):
+    """검증 데이터에 대한 확률(Probability) 계산 및 CSV 저장"""
+    print("\n" + "="*50)
+    print("💾 [Inference] 결과 파일 생성 중...")
     
-    # arguments
-    parser.add_argument("--seed", default=123, type=int, help="set seed") 
-    parser.add_argument("--batch_size", default=8, type=int, help="batch size")
-    parser.add_argument("--max_len", default=512, type=int, help="max length")     
-    parser.add_argument("--num_workers", default=16, type=int, help="number of workers")    
-    parser.add_argument("--dimension_size", default=768, type=int, help="dimension size") 
-    parser.add_argument("--hidden_size", default=100, type=int, help="hidden size")     
-    parser.add_argument("--learning_rate", default=1e-6, type=float, help="learning rate") 
-    parser.add_argument("--weight_decay", default=1e-7, type=float, help="weight decay")   
-    parser.add_argument("--epochs", default=50, type=int, help="epoch")   
-    parser.add_argument("--static_epochs", default=14, type=int, help="epoch for static")   
-    parser.add_argument("--dynamic_epochs", default=2, type=int, help="epoch for dynamic")  
-    parser.add_argument("--temperature", default=0.05, type=float, help="temperature")   
-    parser.add_argument("--assignment", default='static', type=str, help="assignment type")   
-
+    model.eval()
+    pred_labels = []
+    prob_distorted = [] # 왜곡 확률(%)
     
-    parser.add_argument("--MODEL_DIR", default='./model/', type=str, help="where to save the trained model") 
-    parser.add_argument("--MODIFIED_DATA_PATH", default='./data/modified_sample.pkl', type=str, help="data for pretraining")    
-    parser.add_argument("--VERBATIM_DATA_PATH", default='./data/verbatim_sample.pkl', type=str, help="data for pretraining")    
+    with torch.no_grad():
+        for i, row in tqdm(valid_df.iterrows(), total=len(valid_df), desc="Calculating Probabilities"):
+            article = str(row["article_text"])
+            
+            # 토큰화
+            if "distorted" in valid_df.columns:
+                original = str(row["distorted"])
+                encoding = tokenizer(original, article, truncation=True, padding="max_length", max_length=args.max_len, return_tensors="pt")
+            else:
+                encoding = tokenizer(article, truncation=True, padding="max_length", max_length=args.max_len, return_tensors="pt")
+            
+            input_ids = encoding["input_ids"].to(device)
+            attention_mask = encoding["attention_mask"].to(device)
+            token_type_ids = encoding.get("token_type_ids")
+            if token_type_ids is not None: token_type_ids = token_type_ids.to(device)
+            
+            logits = model(input_ids, attention_mask, token_type_ids)
+            probs = F.softmax(logits, dim=1)
+            
+            # Class 1 (왜곡) 확률 저장
+            prob_distorted.append(probs[0][1].item())
+            pred_labels.append(torch.argmax(logits, dim=1).item())
 
-    args = parser.parse_args()
-
-    if not os.path.exists(args.MODEL_DIR):
-        os.makedirs(args.MODEL_DIR)
+    valid_df['pred_label'] = pred_labels
+    valid_df['prob_distorted'] = prob_distorted
     
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-    os.environ['WANDB_CONSOLE'] = 'off'
+    save_path = os.path.join(args.save_dir, "inference_result.csv")
+    valid_df.to_csv(save_path, index=False, encoding='utf-8-sig')
+    print(f"✅ 저장 완료: {save_path}")
+
+def main(args):
+    # 1. 설정 및 초기화
+    os.makedirs(args.save_dir, exist_ok=True)
     set_seed(args.seed)
-    
-    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    args.batch_size = args.batch_size * torch.cuda.device_count()
-    
-    args.backbone_model = get_kobert_model()
-    args.tokenizer = get_tokenizer()
-    loss_func = QuoteCSELoss(temperature=args.temperature, batch_size=args.batch_size)
-    
-    encoder = Encoder(args)
-    encoder = nn.DataParallel(encoder)
-    encoder = encoder.to(args.device)
-    
-    optimizer = torch.optim.Adam(encoder.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    optimizer.zero_grad()
-    
-    print('Making Dataloader')
-    modified_df = pd.read_pickle(args.MODIFIED_DATA_PATH)
-    verbatim_df = pd.read_pickle(args.VERBATIM_DATA_PATH)
-    
-    train_modified_df, test_modified_df = train_test_split(modified_df, test_size=0.2, random_state=args.seed)
-    valid_modified_df, test_modified_df = train_test_split(test_modified_df, test_size=0.5, random_state=args.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Device: {device}")
 
-    train_verbatim_df, test_verbatim_df = train_test_split(verbatim_df, test_size=0.2, random_state=args.seed)
-    valid_verbatim_df, test_verbatim_df = train_test_split(test_verbatim_df, test_size=0.5, random_state=args.seed)
-    
-    train_df = pd.concat([train_modified_df, train_verbatim_df])
-    valid_df = pd.concat([valid_modified_df, valid_verbatim_df])
-    test_df = pd.concat([test_modified_df, test_verbatim_df])
-    
-    train_data_loader = create_data_loader(args,
-                                           df = train_df, 
-                                           shuffle = True,
-                                           drop_last = True)
-    valid_data_loader = create_data_loader(args,
-                                           df = valid_df, 
-                                           shuffle = False,
-                                           drop_last = True)
+    # 2. 데이터 로드
+    print(f"[INFO] Loading data: {args.data_path}")
+    try:
+        if args.data_path.endswith('.pkl'):
+            df = pd.read_pickle(args.data_path)
+        else:
+            # csv 기본
+            df = pd.read_csv(args.data_path)
+    except Exception as e:
+        print(f"Error: {e}")
+        raise ValueError("Check file path/format.")
 
-    
-    early_stopping = EarlyStopping(patience = 3, verbose = True, path=args.MODEL_DIR + 'checkpoint_static_dynamic_early.bin')
-    
-    # train    
-    print('Start Training')
+    # Stratified Split
+    train_df, valid_df = train_test_split(
+        df, test_size=args.val_ratio, random_state=args.split_seed, stratify=df["label"]
+    )
 
-    loss_data = []
-    stop = False
-    
-    encoder.train()
-    for epoch in range(args.epochs):
-        if epoch >= args.static_epochs:
-          args.assignment = 'dynamic'
+    # 3. 모델 및 토크나이저 준비 (roberta-base)
+    backbone, tokenizer = load_backbone_and_tokenizer(args)
+    model = FramingClassifier(backbone, num_classes=args.num_classes)
+    model = model.to(device)
 
-        if epoch >= args.dynamic_epochs + args.static_epochs:
-          break
+    # 4. 데이터셋 & 로더
+    train_dataset = FramingDataset(train_df, tokenizer, args.max_len)
+    valid_dataset = FramingDataset(valid_df, tokenizer, args.max_len)
+    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+
+    # 5. 학습 설정
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+
+    # 6. 학습 루프
+    best_loss = float("inf")
+    train_loss_hist, valid_loss_hist, valid_acc_hist = [], [], []
+
+    print("[INFO] Start Training...")
+    for epoch in range(1, args.epochs + 1):
+        # --- Train ---
+        model.train()
+        train_meter = AverageMeter()
+        tbar = tqdm(train_loader, desc=f"Epoch {epoch} Train")
         
-        losses = AverageMeter()
-        valid_loss = []
+        for batch in tbar:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
+            token_type_ids = batch.get("token_type_ids")
+            if token_type_ids is not None: token_type_ids = token_type_ids.to(device)
+
+            optimizer.zero_grad()
+            logits = model(input_ids, attention_mask, token_type_ids)
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
+
+            train_meter.update(loss.item(), input_ids.size(0))
+            tbar.set_postfix(loss=f"{train_meter.avg:.4f}")
+
+        # --- Valid ---
+        model.eval()
+        val_meter = AverageMeter()
+        preds_list, labels_list = [], []
         
-        tbar1 = tqdm(train_data_loader)
-        tbar2 = tqdm(valid_data_loader)
-        
-        for title, body, body_len, pos_idx, neg_idx in tbar1:
-          
-          title_id, title_at = title['input_ids'].to(args.device).long(), title['attention_mask'].to(args.device).long()
-          b_ids = []
-          b_atts = []
-
-          for b in range(len(body_len)):
-            i = body_len[b]
-            b_id, b_at = body['input_ids'][b][:i].to(args.device).long(), body['attention_mask'][b][:i].to(args.device).long()
-            b_ids.append(b_id)
-            b_atts.append(b_at)
-          body_ids = torch.cat(b_ids, dim=0)
-          body_atts = torch.cat(b_atts, dim=0)
-
-          if args.assignment == 'static':
-            pos_body_ids, neg_body_ids, pos_body_atts, neg_body_atts = make_pair(args, body, title_id, title_at, body_ids, body_atts, body_len, encoder, pos_idx, neg_idx)
-          
-          elif args.assignment == 'dynamic':
-            pos_body_ids, neg_body_ids, pos_body_atts, neg_body_atts = make_pair(args, body, title_id, title_at, body_ids, body_atts, body_len, encoder)
-
-          del body_ids, body_atts, body_len
-
-          outputs = encoder(
-            input_ids = torch.cat([title_id, pos_body_ids, neg_body_ids]),
-            attention_mask = torch.cat([title_at, pos_body_atts, neg_body_atts]),
-          )
-
-          loss = loss_func(outputs)
-
-          optimizer.zero_grad()
-          loss.backward()
-          optimizer.step()
-
-          losses.update(loss.item(), args.batch_size)
-          tbar1.set_description("loss: {0:.6f}".format(losses.avg), refresh=True)
-
-          del title_id, pos_body_ids, neg_body_ids, title_at, pos_body_atts, neg_body_atts, outputs, loss
-
-        ts = datetime.datetime.now().timestamp()
-        loss_data.append([epoch, losses.avg, 'Train', ts])
-
-
-        # valid
         with torch.no_grad():
-          for title, body, body_len, pos_idx, neg_idx in tbar2:
-            title_id, title_at = title['input_ids'].to(args.device).long(), title['attention_mask'].to(args.device).long()
-            b_ids = []
-            b_atts = []
+            for batch in tqdm(valid_loader, desc=f"Epoch {epoch} Valid"):
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch["attention_mask"].to(device)
+                labels = batch["label"].to(device)
+                token_type_ids = batch.get("token_type_ids")
+                if token_type_ids is not None: token_type_ids = token_type_ids.to(device)
 
-            for b in range(len(body_len)):
-              i = body_len[b]
-              b_id, b_at = body['input_ids'][b][:i].to(args.device).long(), body['attention_mask'][b][:i].to(args.device).long()
-              b_ids.append(b_id)
-              b_atts.append(b_at)
-            body_ids = torch.cat(b_ids, dim=0)
-            body_atts = torch.cat(b_atts, dim=0)
+                logits = model(input_ids, attention_mask, token_type_ids)
+                loss = criterion(logits, labels)
+                val_meter.update(loss.item(), input_ids.size(0))
+                
+                preds = torch.argmax(logits, dim=1).cpu().numpy()
+                preds_list.extend(preds)
+                labels_list.extend(labels.cpu().numpy())
 
-            if args.assignment == 'static':
-              pos_body_ids, neg_body_ids, pos_body_atts, neg_body_atts = make_pair(args, body, title_id, title_at, body_ids, body_atts, body_len, encoder, pos_idx, neg_idx)
+        val_acc = accuracy_score(labels_list, preds_list)
+        print(f"Epoch {epoch} | Train Loss: {train_meter.avg:.4f} | Val Loss: {val_meter.avg:.4f} | Val Acc: {val_acc:.4f}")
 
-            elif args.assignment == 'dynamic':
-              pos_body_ids, neg_body_ids, pos_body_atts, neg_body_atts = make_pair(args, body, title_id, title_at, body_ids, body_atts, body_len, encoder)
+        # 기록 및 저장
+        train_loss_hist.append(train_meter.avg)
+        valid_loss_hist.append(val_meter.avg)
+        valid_acc_hist.append(val_acc)
 
-            del body_ids, body_atts, body_len
+        if val_meter.avg < best_loss:
+            best_loss = val_meter.avg
+            torch.save(model.state_dict(), os.path.join(args.save_dir, "classifier_best.bin"))
+            print("★ Best Model Saved")
 
-            outputs = encoder(
-              input_ids = torch.cat([title_id, pos_body_ids, neg_body_ids]),
-              attention_mask = torch.cat([title_at, pos_body_atts, neg_body_atts]),
-            )
-
-            loss = loss_func(outputs)
-            valid_loss.append(loss.item())
-
-            del title_id, pos_body_ids, neg_body_ids, title_at, pos_body_atts, neg_body_atts, outputs, loss
-
-          avg_valid_loss = sum(valid_loss) / len(valid_loss)
-          ts = datetime.datetime.now().timestamp()
-          loss_data.append([epoch, avg_valid_loss, 'Valid', ts])
-
-          print(str(epoch), 'th epoch, Avg Valid Loss: ', str(avg_valid_loss))
-
-          early_stopping(avg_valid_loss, encoder) 
-          if early_stopping.early_stop:
-            break
-
-    torch.save(encoder.state_dict(), args.MODEL_DIR + 'checkpoint.bin')
-
-    # save loss
-    df_loss = pd.DataFrame(loss_data, columns=('Epoch', 'Loss', 'Type', 'Time'))
-    df_loss.to_csv(args.MODEL_DIR + 'loss.csv', sep=',', index=False)
-
+    # 7. 그래프 저장 및 추론 결과 생성
+    plt.plot(train_loss_hist, label='Train Loss')
+    plt.plot(valid_loss_hist, label='Valid Loss')
+    plt.legend()
+    plt.savefig(os.path.join(args.save_dir, "loss_curve.png"))
     
-    
+    # Best Model 로드 후 추론 결과 저장
+    model.load_state_dict(torch.load(os.path.join(args.save_dir, "classifier_best.bin"), map_location=device))
+    save_inference_results(model, tokenizer, valid_df, device, args)
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    # [설정] 기본값을 roberta-base로 변경 완료
+    parser.add_argument("--data_path", type=str, default="dataset.csv")
+    parser.add_argument("--backbone", type=str, default="hf")  # 'kobert' -> 'hf'
+    parser.add_argument("--hf_model_name", type=str, default="roberta-base") # 모델명 지정
+    parser.add_argument("--save_dir", type=str, default="./model_result")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--val_ratio", type=float, default=0.2)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split_seed", type=int, default=0)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--max_len", type=int, default=256)
+    parser.add_argument("--num_classes", type=int, default=2)
+    
+    args = parser.parse_args()
+    main(args)
