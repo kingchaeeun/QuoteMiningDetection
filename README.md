@@ -75,9 +75,6 @@ python train.py
 ```bash
 python train.py \
     --data_path "data/dataset.csv" \
-    --hf_model_name "roberta-base" \
-    --epochs 5 \
-    --batch_size 16
 ```
 
 **학습 결과물 (`model_result/` 폴더 생성):**
@@ -125,6 +122,7 @@ python evaluate.py
   ▶ 확률 분석: 정상 12.5% vs 왜곡 87.5%
   ✅ 정답입니다!
   ```
+
 
 
 
